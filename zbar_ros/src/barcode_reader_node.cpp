@@ -53,6 +53,9 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     if (throttle_ > 0.0) {
         clean_timer_ = this->create_wall_timer(10s, std::bind(&BarcodeReaderNode::cleanCb, this));
     }
+
+    image_topic_ = this->declare_parameter<std::string>("image_topic", "/camera/image/compressed");
+    RCLCPP_DEBUG(get_logger(), "Subscribing to image topic: %s", image_topic_.c_str());
 }
 
 void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {
