@@ -41,8 +41,8 @@ namespace zbar_ros {
 BarcodeReaderNode::BarcodeReaderNode() : Node("BarcodeReader") {
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
 
-    camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(image_topic_, 10,
-                                                                     std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
+    camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+        image_topic_, 10, std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
 
     symbol_pub_ = this->create_publisher<zbar_ros_interfaces::msg::Symbol>("symbol", 10);
     barcode_pub_ = this->create_publisher<std_msgs::msg::String>("barcode", 10);
@@ -55,11 +55,11 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("BarcodeReader") {
     }
 }
 
-void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
+void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {
     RCLCPP_DEBUG(get_logger(), "Image received on subscribed topic");
 
     cv_bridge::CvImageConstPtr cv_image;
-    cv_image = cv_bridge::toCvShare(image, "mono8");
+    cv_image = cv_bridge::toCvCopy(image, "mono8");
 
     zbar::Image zbar_image(cv_image->image.cols, cv_image->image.rows, "Y800", cv_image->image.data,
                            cv_image->image.cols * cv_image->image.rows);
