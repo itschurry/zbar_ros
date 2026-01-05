@@ -38,7 +38,7 @@ using namespace std::chrono_literals;
 
 namespace zbar_ros {
 
-BarcodeReaderNode::BarcodeReaderNode() : Node("BarcodeReader") {
+BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
 
     camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
