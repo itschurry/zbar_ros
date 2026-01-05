@@ -60,6 +60,8 @@ class BarcodeReaderNode : public rclcpp::Node {
     std::mutex memory_mutex_;
     std::unordered_map<std::string, rclcpp::Time> barcode_memory_;
     double throttle_;
+
+    std::string image_topic_{"image"};
 };
 
 } // namespace zbar_ros
