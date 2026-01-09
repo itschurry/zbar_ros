@@ -41,11 +41,15 @@ namespace zbar_ros {
 BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
 
+    image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image/compressed");
+    qr_code_topic_ = this->declare_parameter<std::string>("qr_code_topic", "/barcode");
+    RCLCPP_DEBUG(get_logger(), "Subscribing to topics: %s, %s", image_topic_.c_str(), qr_code_topic_.c_str());
+
     camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
         image_topic_, 10, std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
 
     symbol_pub_ = this->create_publisher<zbar_ros_interfaces::msg::Symbol>("symbol", 10);
-    barcode_pub_ = this->create_publisher<std_msgs::msg::String>("barcode", 10);
+    barcode_pub_ = this->create_publisher<std_msgs::msg::String>(qr_code_topic_, 10);
 
     throttle_ = this->declare_parameter<double>("throttle_repeated_barcodes", 0.0);
     RCLCPP_DEBUG(get_logger(), "throttle_repeated_barcodes : %f", throttle_);
@@ -53,9 +57,6 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     if (throttle_ > 0.0) {
         clean_timer_ = this->create_wall_timer(10s, std::bind(&BarcodeReaderNode::cleanCb, this));
     }
-
-    image_topic_ = this->declare_parameter<std::string>("image_topic", "/camera/image/compressed");
-    RCLCPP_DEBUG(get_logger(), "Subscribing to image topic: %s", image_topic_.c_str());
 }
 
 void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {

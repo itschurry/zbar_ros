@@ -62,7 +62,8 @@ class BarcodeReaderNode : public rclcpp::Node {
     std::unordered_map<std::string, rclcpp::Time> barcode_memory_;
     double throttle_;
 
-    std::string image_topic_{"/camera/image/compressed"};
+    std::string image_topic_{"camera/image/compressed"};
+    std::string qr_code_topic_{"/barcode"};
 };
 
 } // namespace zbar_ros
