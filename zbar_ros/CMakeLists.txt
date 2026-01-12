@@ -38,6 +38,8 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/
   DESTINATION include/)
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME})
 install(
   TARGETS barcode_reader_node
   EXPORT export_${PROJECT_NAME}
