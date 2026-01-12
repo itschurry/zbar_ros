@@ -65,8 +65,46 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPt
     cv_bridge::CvImageConstPtr cv_image;
     cv_image = cv_bridge::toCvCopy(image, "mono8");
 
-    zbar::Image zbar_image(cv_image->image.cols, cv_image->image.rows, "Y800", cv_image->image.data,
-                           cv_image->image.cols * cv_image->image.rows);
+    // 원본 크기
+    const int w = cv_image->image.cols;
+    const int h = cv_image->image.rows;
+
+    // 4사분면 ROI (오른쪽 아래). 필요에 맞게 비율 조정.
+    cv::Rect roi(w * 0.8, h * 0.8, w - w * 0.8, h - h * 0.8);
+
+    cv::Mat cropped = cv_image->image(roi);
+
+    // 필요하면 업샘플과 전처리
+    cv::Mat up;
+    cv::resize(cropped, up, cv::Size(), 2.0, 2.0, cv::INTER_CUBIC);
+    cv::Mat enhanced;
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+    clahe->apply(up, enhanced);
+
+    cv::Mat bw;
+    cv::adaptiveThreshold(enhanced, bw, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
+                          cv::THRESH_BINARY, 11, 2);
+
+    // 약한 샤프닝(선택)
+    cv::Mat blur, sharp;
+    cv::GaussianBlur(bw, blur, cv::Size(0, 0), 1.0);
+    cv::addWeighted(bw, 1.5, blur, -0.5, 0, sharp);
+
+    // 임시 토픽 발행(디버깅용)
+    static rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub =
+        this->create_publisher<sensor_msgs::msg::Image>("debug/enhanced_image", 10);
+    sensor_msgs::msg::Image debug_msg;
+    cv_bridge::CvImage debug_cv_image;
+    debug_cv_image.header = image->header;
+    debug_cv_image.encoding = "mono8";
+    debug_cv_image.image = sharp;
+    debug_cv_image.toImageMsg(debug_msg);
+    debug_pub->publish(debug_msg);
+
+    zbar::Image zbar_image(sharp.cols, sharp.rows, "Y800", sharp.data, sharp.cols * sharp.rows);
+
+    // zbar::Image zbar_image(cv_image->image.cols, cv_image->image.rows, "Y800", cv_image->image.data,
+    //                        cv_image->image.cols * cv_image->image.rows);
     scanner_.scan(zbar_image);
 
     auto it_start = zbar_image.symbol_begin();
