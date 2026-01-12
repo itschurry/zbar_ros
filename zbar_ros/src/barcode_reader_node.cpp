@@ -29,10 +29,13 @@
  *
  */
 #include <string>
+#include <vector>
 #include <functional>
 #include <chrono>
 #include "zbar_ros/barcode_reader_node.hpp"
 #include "cv_bridge/cv_bridge.hpp"
+#include <opencv2/opencv.hpp>
+#include <opencv2/objdetect.hpp>
 
 using namespace std::chrono_literals;
 
@@ -65,12 +68,22 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPt
     cv_bridge::CvImageConstPtr cv_image;
     cv_image = cv_bridge::toCvCopy(image, "mono8");
 
-    // 원본 크기
+    cv::QRCodeDetector qrDecoder;
     const int w = cv_image->image.cols;
     const int h = cv_image->image.rows;
 
-    // 4사분면 ROI (오른쪽 아래). 필요에 맞게 비율 조정.
-    cv::Rect roi(w * 0.8, h * 0.8, w - w * 0.8, h - h * 0.8);
+    // QR을 먼저 찾아서 주변을 ROI로 사용, 실패 시 전체 프레임 사용
+    std::vector<cv::Point> qr_points;
+    cv::Rect roi(w * 0.5, h * 0.5, w - (w * 0.5), h - (h * 0.5));
+    if (qrDecoder.detect(cv_image->image, qr_points) && qr_points.size() >= 4) {
+        cv::Rect qr_bounds = cv::boundingRect(qr_points);
+        const int pad = static_cast<int>(0.1 * std::max(qr_bounds.width, qr_bounds.height));
+        cv::Rect expanded(qr_bounds.x - pad, qr_bounds.y - pad, qr_bounds.width + 2 * pad, qr_bounds.height + 2 * pad);
+        roi = expanded & cv::Rect(0, 0, w, h); // clamp to image
+        RCLCPP_DEBUG(get_logger(), "Using QR-estimated ROI x:%d y:%d w:%d h:%d", roi.x, roi.y, roi.width, roi.height);
+    } else {
+        RCLCPP_DEBUG(get_logger(), "QR ROI not found, using full frame");
+    }
 
     cv::Mat cropped = cv_image->image(roi);
 
@@ -82,8 +95,7 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPt
     clahe->apply(up, enhanced);
 
     cv::Mat bw;
-    cv::adaptiveThreshold(enhanced, bw, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
-                          cv::THRESH_BINARY, 11, 2);
+    cv::adaptiveThreshold(enhanced, bw, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 11, 2);
 
     // 약한 샤프닝(선택)
     cv::Mat blur, sharp;

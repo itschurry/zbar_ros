@@ -11,11 +11,13 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(zbar_ros_interfaces REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 
 # Include header files
 include_directories(
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 # Build library
@@ -27,6 +29,7 @@ ament_target_dependencies(barcode_reader_node
   cv_bridge
   zbar_ros_interfaces)
 target_link_libraries(barcode_reader_node zbar)
+target_link_libraries(barcode_reader_node ${OpenCV_LIBRARIES})
 
 # Build executable
 add_executable(barcode_reader src/barcode_reader_main.cpp)
