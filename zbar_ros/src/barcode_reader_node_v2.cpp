@@ -216,7 +216,7 @@ static bool detectQrRoiMorph(const cv::Mat& gray_small, float inv_scale_to_full,
     return true;
 }
 
-static cv::Mat warpOrCropQr(const cv::Mat& gray_full, const QrCandidate& cand, int min_out = 480) {
+static cv::Mat warpOrCropQr(const cv::Mat& gray_full, const QrCandidate& cand, int min_out = 320) {
     cv::Mat roi = gray_full(cand.roi);
     if (!cand.has_quad) {
         // Simple crop; upscale a bit for zbar.
@@ -239,7 +239,9 @@ static cv::Mat warpOrCropQr(const cv::Mat& gray_full, const QrCandidate& cand, i
     int out_w = static_cast<int>(std::lround(std::max(w1, w2)));
     int out_h = static_cast<int>(std::lround(std::max(h1, h2)));
     int out_s = std::max({min_out, out_w, out_h});
-    out_s = std::min(out_s, 1024); // keep it bounded for speed
+    // Bigger warped ROI can drastically improve decode success when the original is slightly blurred.
+    // 1600 is still fast enough on Pi5 for a single ROI per frame.
+    out_s = std::min(out_s, 1600);
 
     // Build points in ROI-local coordinates
     std::vector<cv::Point2f> src(4), dst(4);
@@ -253,6 +255,7 @@ static cv::Mat warpOrCropQr(const cv::Mat& gray_full, const QrCandidate& cand, i
 
     cv::Mat H = cv::getPerspectiveTransform(src, dst);
     cv::Mat warped;
+    // INTER_NEAREST preserves module edges better than linear when scaling.
     cv::warpPerspective(roi, warped, H, cv::Size(out_s, out_s), cv::INTER_NEAREST, cv::BORDER_REPLICATE);
     return warped;
 }
@@ -267,7 +270,7 @@ static cv::Mat ensureGray8(const cv::Mat& in) {
   return g;
 }
 
-static cv::Mat padQuietZone(const cv::Mat& gray, float pad_frac = 0.10f) {
+static cv::Mat padQuietZone(const cv::Mat& gray, float pad_frac = 0.15f) {
   // zbar (and many QR decoders) are very sensitive to the quiet zone.
   // We enforce a clean white border around the candidate ROI.
   cv::Mat g = ensureGray8(gray);
@@ -289,59 +292,43 @@ static cv::Mat upscaleIfSmall(const cv::Mat& gray, int min_side = 320) {
 }
 
 static std::vector<cv::Mat> buildDecodeVariants(const cv::Mat& qr_gray_view) {
-  // IMPORTANT: 우선 최소한의 변형부터 시도하고, 점진적으로 대비/이진화/반전을 늘립니다.
+  // IMPORTANT: For decoding, avoid aggressive binarization first.
+  // Try a small set of cheap variants, ordered by speed/robustness.
   std::vector<cv::Mat> outs;
-  outs.reserve(9);
+  outs.reserve(3);
 
-  cv::Mat raw = ensureGray8(qr_gray_view);
+  // Use a slightly larger minimum side to help zbar when the QR is a bit blurred.
+  cv::Mat g0 = upscaleIfSmall(qr_gray_view, /*min_side=*/512);
+  g0 = padQuietZone(g0, 0.20f);
+  outs.push_back(g0);
 
-  // Variant 0: 원본 (크기 유지)
-  outs.push_back(raw);
+  // Variant 2: mild denoise (helps speckle after resize)
+  cv::Mat den;
+  cv::medianBlur(g0, den, 3);
+  outs.push_back(den);
 
-  // Variant 1: 소형이면 업스케일(근방 보간)만 적용
-  cv::Mat g_up = upscaleIfSmall(raw, /*min_side=*/320);
-  outs.push_back(g_up);
-
-  // Variant 2: 업스케일 + 조용 영역 확보(희게 패딩)
-  cv::Mat g_pad = padQuietZone(g_up, 0.15f);
-  outs.push_back(g_pad);
-
-  // Variant 3: CLAHE (저대비 인쇄 대응)
+  // Variant 3: CLAHE (helps low-contrast printed QR)
   cv::Mat eq;
   {
     cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    clahe->apply(g_pad, eq);
+    clahe->apply(den, eq);
   }
   outs.push_back(eq);
 
-  // Variant 4: CLAHE + 언샤프 마스크(선명하게)
-  cv::Mat blur_sm;
-  cv::GaussianBlur(eq, blur_sm, cv::Size(0, 0), 1.0);
-  cv::Mat sharp;
-  cv::addWeighted(eq, 1.5, blur_sm, -0.5, 0, sharp);
-  outs.push_back(sharp);
+  // Variant 4: adaptive threshold (often better than Otsu when lighting is uneven)
+  cv::Mat ad;
+  cv::adaptiveThreshold(eq, ad, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 5);
+  outs.push_back(ad);
 
-  // Variant 5: CLAHE + Otsu
+  // Variant 5: Otsu on CLAHE (last resort)
   cv::Mat bw;
   cv::threshold(eq, bw, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
   outs.push_back(bw);
 
-  // Variant 6: CLAHE + 가우시안 블러(압축링 완화) + Otsu
-  cv::Mat blur;
-  cv::GaussianBlur(eq, blur, cv::Size(3, 3), 0.8);
-  cv::Mat bw_blur;
-  cv::threshold(blur, bw_blur, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-  outs.push_back(bw_blur);
-
-  // Variant 7: 반전
+  // Variant 6: inverted Otsu (some prints/cameras invert polarity)
   cv::Mat inv;
-  cv::bitwise_not(eq, inv);
+  cv::bitwise_not(bw, inv);
   outs.push_back(inv);
-
-  // Variant 8: 반전 + Otsu
-  cv::Mat inv_bw;
-  cv::threshold(inv, inv_bw, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-  outs.push_back(inv_bw);
 
   return outs;
 }
@@ -353,7 +340,11 @@ using namespace std::chrono_literals;
 namespace zbar_ros {
 
 BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
+    // Enable QR explicitly and bump scan density a bit.
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
+    scanner_.set_config(zbar::ZBAR_QRCODE, zbar::ZBAR_CFG_ENABLE, 1);
+    scanner_.set_config(zbar::ZBAR_QRCODE, zbar::ZBAR_CFG_X_DENSITY, 2);
+    scanner_.set_config(zbar::ZBAR_QRCODE, zbar::ZBAR_CFG_Y_DENSITY, 2);
 
     image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image/compressed");
     qr_code_topic_ = this->declare_parameter<std::string>("qr_code_topic", "/barcode");
@@ -419,39 +410,9 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPt
     }
 
     // ---- 2) Extract (warp if possible) + preprocess for zbar ----
-    cv::Mat qr_view = warpOrCropQr(gray_full, cand, /*min_out=*/320);
+    cv::Mat qr_view = warpOrCropQr(gray_full, cand, /*min_out=*/512);
     auto decode_variants = buildDecodeVariants(qr_view);
     cv::Mat cropped = decode_variants.empty() ? cv::Mat() : decode_variants.front();
-
-    // ---- 2a) Try OpenCV decode directly on warped/cropped view (fallback publish)
-    cv::QRCodeDetector det_decode;
-    std::vector<cv::Point> ov_points;
-    std::string ocv_data = det_decode.detectAndDecode(qr_view, ov_points);
-    if (!ocv_data.empty()) {
-        zbar_ros_interfaces::msg::Symbol symbol;
-        symbol.data = ocv_data;
-        for (const auto& p : ov_points) {
-            vision_msgs::msg::Point2D pt;
-            pt.x = p.x;
-            pt.y = p.y;
-            symbol.points.push_back(pt);
-        }
-        auto publish_ocv = [&](const zbar_ros_interfaces::msg::Symbol& s) {
-            if (throttle_ > 0.0) {
-                const std::lock_guard<std::mutex> lock(memory_mutex_);
-                if (barcode_memory_.count(s.data) == 0 || now() > barcode_memory_.at(s.data)) {
-                    barcode_memory_.insert(std::make_pair(s.data, now() + rclcpp::Duration(std::chrono::duration<double>(throttle_))));
-                } else {
-                    return;
-                }
-            }
-            symbol_pub_->publish(s);
-            std_msgs::msg::String barcode_string;
-            barcode_string.data = s.data;
-            barcode_pub_->publish(barcode_string);
-        };
-        publish_ocv(symbol);
-    }
 
     // ---- 3) Debug image (optional but super useful when tuning) ----
     cv::Mat debug_bgr;
@@ -527,7 +488,32 @@ for (size_t vi = 0; vi < decode_variants.size(); ++vi) {
 }
 
 if (!any_decoded) {
-    RCLCPP_DEBUG(get_logger(), "No QR detected/decoded in image (tried %zu variants)", decode_variants.size());
+    // Fallback: OpenCV's QR decoder occasionally succeeds where zbar fails (especially on noisy binarized input).
+    // This keeps zbar as primary, but gives us an extra chance without another full-frame detect.
+    cv::QRCodeDetector dec;
+    std::string decoded;
+    for (size_t vi = 0; vi < decode_variants.size() && decoded.empty(); ++vi) {
+        cv::Mat scan_img = decode_variants[vi];
+        if (scan_img.empty()) continue;
+        // detectAndDecode expects natural grayscale more than hard binary; try both as-is.
+        std::vector<cv::Point> pts;
+        decoded = dec.detectAndDecode(scan_img, pts);
+        if (!decoded.empty()) {
+            RCLCPP_DEBUG(get_logger(), "OpenCV fallback decoded (variant %zu) data: '%s'", vi, decoded.c_str());
+            zbar_ros_interfaces::msg::Symbol symbol;
+            symbol.data = decoded;
+            symbol_pub_->publish(symbol);
+            std_msgs::msg::String barcode_string;
+            barcode_string.data = decoded;
+            barcode_pub_->publish(barcode_string);
+            any_decoded = true;
+            cropped = scan_img;
+            break;
+        }
+    }
+    if (!any_decoded) {
+        RCLCPP_DEBUG(get_logger(), "No QR decoded (zbar+opencv fallback). Tried %zu variants", decode_variants.size());
+    }
 }
 
 // ---- 4) Publish debug images ----
