@@ -64,7 +64,8 @@ class BarcodeReaderNode : public rclcpp::Node {
     double throttle_;
 
     std::string image_topic_{"camera/image/compressed"};
-    std::string qr_code_topic_{"/barcode"};
+    std::string qr_code_topic_{"/barcode/code_string"};
+    std::string qr_image_topic_{"/barcode/image"};
 };
 
 } // namespace zbar_ros
