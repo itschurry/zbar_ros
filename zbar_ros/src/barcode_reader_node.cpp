@@ -75,7 +75,7 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
 
     image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image/compressed");
     qr_code_topic_ = this->declare_parameter<std::string>("qr_code_topic", "/barcode/code_string");
-    qr_image_topic_ = this->declare_parameter<std::string>("qr_image_topic", "/barcode/qr_image");
+    qr_image_topic_ = this->declare_parameter<std::string>("qr_image_topic", "/barcode/image");
     RCLCPP_DEBUG(get_logger(), "Subscribing to topics: %s, %s", image_topic_.c_str(), qr_code_topic_.c_str());
 
     camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
