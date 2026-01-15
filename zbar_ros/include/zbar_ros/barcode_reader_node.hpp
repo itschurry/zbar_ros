@@ -55,9 +55,7 @@ class BarcodeReaderNode : public rclcpp::Node {
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr camera_sub_;
     rclcpp::Publisher<zbar_ros_interfaces::msg::Symbol>::SharedPtr symbol_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr barcode_pub_; // DEPRECATED
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_roi_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_crop_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_preprocessed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr barcode_image_pub_;
     zbar::ImageScanner scanner_;
 
     rclcpp::TimerBase::SharedPtr clean_timer_;
