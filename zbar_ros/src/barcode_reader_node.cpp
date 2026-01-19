@@ -81,9 +81,11 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
         image_topic_, 10, std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
 
+    rclcpp::QoS qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
+
     symbol_pub_ = this->create_publisher<zbar_ros_interfaces::msg::Symbol>("symbol", 10);
     barcode_pub_ = this->create_publisher<std_msgs::msg::String>(qr_code_topic_, 10);
-    barcode_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(qr_image_topic_, 10);
+    barcode_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(qr_image_topic_, qos);
 
     throttle_ = this->declare_parameter<double>("throttle_repeated_barcodes", 0.0);
     RCLCPP_DEBUG(get_logger(), "throttle_repeated_barcodes : %f", throttle_);
