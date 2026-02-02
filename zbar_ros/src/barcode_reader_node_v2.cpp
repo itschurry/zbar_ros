@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <functional>
 #include <chrono>
+#include <exception>
 #include <cmath>
 #include "zbar_ros/barcode_reader_node.hpp"
 #include "cv_bridge/cv_bridge.hpp"
@@ -106,7 +107,12 @@ static bool detectQrRoiOpenCV(const cv::Mat& gray_small, float inv_scale_to_full
     }
 
     std::vector<cv::Point> pts_i;
-    if (!det.detect(proc, pts_i) || pts_i.size() < 4) {
+    try {
+        if (!det.detect(proc, pts_i) || pts_i.size() < 4) {
+            return false;
+        }
+    } catch (const cv::Exception&) {
+        // OpenCV's QR detector may throw internally (e.g. convexHull assertion).
         return false;
     }
 
@@ -217,7 +223,14 @@ static bool detectQrRoiMorph(const cv::Mat& gray_small, float inv_scale_to_full,
 }
 
 static cv::Mat warpOrCropQr(const cv::Mat& gray_full, const QrCandidate& cand, int min_out = 320) {
-    cv::Mat roi = gray_full(cand.roi);
+    if (gray_full.empty() || cand.roi.width <= 0 || cand.roi.height <= 0) {
+        return cv::Mat();
+    }
+    const cv::Rect safe = clampRect(cand.roi, gray_full.size());
+    if (safe.width <= 0 || safe.height <= 0) {
+        return cv::Mat();
+    }
+    cv::Mat roi = gray_full(safe);
     if (!cand.has_quad) {
         // Simple crop; upscale a bit for zbar.
         if (std::min(roi.cols, roi.rows) < min_out) {
@@ -371,12 +384,17 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
 void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {
     RCLCPP_DEBUG(get_logger(), "Image received on subscribed topic");
 
+    try {
+
     cv_bridge::CvImageConstPtr cv_image;
     cv_image = cv_bridge::toCvCopy(image, "mono8");
 
     const cv::Mat& gray_full = cv_image->image;
     const int w = gray_full.cols;
     const int h = gray_full.rows;
+    if (gray_full.empty() || w <= 0 || h <= 0) {
+        return;
+    }
 
     // ---- 1) FAST ROI detection on a downsized frame ----
     const int target_max = 640; // tune: smaller = faster, larger = more robust
@@ -497,7 +515,11 @@ if (!any_decoded) {
         if (scan_img.empty()) continue;
         // detectAndDecode expects natural grayscale more than hard binary; try both as-is.
         std::vector<cv::Point> pts;
-        decoded = dec.detectAndDecode(scan_img, pts);
+        try {
+            decoded = dec.detectAndDecode(scan_img, pts);
+        } catch (const cv::Exception&) {
+            decoded.clear();
+        }
         if (!decoded.empty()) {
             RCLCPP_DEBUG(get_logger(), "OpenCV fallback decoded (variant %zu) data: '%s'", vi, decoded.c_str());
             zbar_ros_interfaces::msg::Symbol symbol;
@@ -560,6 +582,16 @@ if (!any_decoded) {
                                   "in the next distribution.");
     }
 
+    } catch (const cv::Exception& e) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "OpenCV exception in barcode_reader_node_v2 imageCb: %s", e.what());
+        return;
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "Exception in barcode_reader_node_v2 imageCb: %s", e.what());
+        return;
+    } catch (...) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "Unknown exception in barcode_reader_node_v2 imageCb");
+        return;
+    }
 }
 
 void BarcodeReaderNode::cleanCb() {

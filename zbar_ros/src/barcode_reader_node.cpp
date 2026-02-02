@@ -32,6 +32,7 @@
 #include <vector>
 #include <functional>
 #include <chrono>
+#include <exception>
 #include "zbar_ros/barcode_reader_node.hpp"
 #include "cv_bridge/cv_bridge.hpp"
 #include <opencv2/opencv.hpp>
@@ -44,15 +45,34 @@ static inline cv::Rect clampRect(const cv::Rect& r, const cv::Size& sz) {
 }
 
 static cv::Rect detectQrRoi(const cv::Mat& gray) {
-    cv::QRCodeDetector det;
-    std::vector<cv::Point> points;
-    if (!det.detect(gray, points) || points.size() < 4) {
+    if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
+        return cv::Rect();
+    }
+
+    try {
+        cv::QRCodeDetector det;
+        std::vector<cv::Point> points;
+        if (!det.detect(gray, points) || points.size() < 4) {
+            return cv::Rect(0, 0, gray.cols, gray.rows);
+        }
+
+        cv::Rect bbox = cv::boundingRect(points);
+        if (bbox.width <= 0 || bbox.height <= 0) {
+            return cv::Rect(0, 0, gray.cols, gray.rows);
+        }
+
+        const int pad = static_cast<int>(0.1f * std::max(bbox.width, bbox.height));
+        cv::Rect expanded(bbox.x - pad, bbox.y - pad, bbox.width + 2 * pad, bbox.height + 2 * pad);
+        expanded = clampRect(expanded, gray.size());
+        if (expanded.width <= 0 || expanded.height <= 0) {
+            return cv::Rect(0, 0, gray.cols, gray.rows);
+        }
+        return expanded;
+    } catch (const cv::Exception&) {
+        // OpenCV's QR detector may throw internally (e.g. convexHull assertion).
+        // Treat it as "no ROI" and keep the process alive.
         return cv::Rect(0, 0, gray.cols, gray.rows);
     }
-    cv::Rect bbox = cv::boundingRect(points);
-    const int pad = static_cast<int>(0.1f * std::max(bbox.width, bbox.height));
-    cv::Rect expanded(bbox.x - pad, bbox.y - pad, bbox.width + 2 * pad, bbox.height + 2 * pad);
-    return clampRect(expanded, gray.size());
 }
 
 static cv::Mat upscaleIfSmall(const cv::Mat& gray, int min_side = 320) {
@@ -98,12 +118,23 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
 void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {
     RCLCPP_DEBUG(get_logger(), "Image received on subscribed topic");
 
+    try {
+
     cv_bridge::CvImageConstPtr cv_image;
     cv_image = cv_bridge::toCvCopy(image, "mono8");
 
     const cv::Mat& gray = cv_image->image;
+    if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
+        return;
+    }
     const cv::Rect roi = detectQrRoi(gray);
+    if (roi.width <= 0 || roi.height <= 0) {
+        return;
+    }
     cv::Mat cropped = gray(roi);
+    if (cropped.empty()) {
+        return;
+    }
     cv::Mat scan_img = upscaleIfSmall(cropped, 320);
 
     if (barcode_image_pub_ && barcode_image_pub_->get_subscription_count() > 0) {
@@ -161,6 +192,16 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPt
     }
 
     zimg.set_data(NULL, 0);
+    } catch (const cv::Exception& e) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "OpenCV exception in barcode_reader_node imageCb: %s", e.what());
+        return;
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "Exception in barcode_reader_node imageCb: %s", e.what());
+        return;
+    } catch (...) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "Unknown exception in barcode_reader_node imageCb");
+        return;
+    }
 }
 
 void BarcodeReaderNode::cleanCb() {
