@@ -93,14 +93,14 @@ namespace zbar_ros {
 BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
 
-    image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image/compressed");
+    image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image");
     qr_code_topic_ = this->declare_parameter<std::string>("qr_code_topic", "/barcode/code_string");
     qr_image_topic_ = this->declare_parameter<std::string>("qr_image_topic", "/barcode/image");
     RCLCPP_DEBUG(get_logger(), "Subscribing to topics: %s, %s", image_topic_.c_str(), qr_code_topic_.c_str());
 
     rclcpp::QoS qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
 
-    camera_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+    camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
         image_topic_, qos, std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
 
     symbol_pub_ = this->create_publisher<zbar_ros_interfaces::msg::Symbol>("symbol", 10);
@@ -115,7 +115,7 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     }
 }
 
-void BarcodeReaderNode::imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr image) {
+void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
     RCLCPP_DEBUG(get_logger(), "Image received on subscribed topic");
 
     try {
