@@ -93,7 +93,7 @@ namespace zbar_ros {
 BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
     scanner_.set_config(zbar::ZBAR_NONE, zbar::ZBAR_CFG_ENABLE, 1);
 
-    image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image");
+    image_topic_ = this->declare_parameter<std::string>("image_topic", "camera/image/mono8");
     qr_code_topic_ = this->declare_parameter<std::string>("qr_code_topic", "/barcode/code_string");
     qr_image_topic_ = this->declare_parameter<std::string>("qr_image_topic", "/barcode/image");
     RCLCPP_DEBUG(get_logger(), "Subscribing to topics: %s, %s", image_topic_.c_str(), qr_code_topic_.c_str());
@@ -121,7 +121,7 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
     try {
 
     cv_bridge::CvImageConstPtr cv_image;
-    cv_image = cv_bridge::toCvCopy(image, "mono8");
+    cv_image = cv_bridge::toCvShare(image, "mono8");
 
     const cv::Mat& gray = cv_image->image;
     if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {

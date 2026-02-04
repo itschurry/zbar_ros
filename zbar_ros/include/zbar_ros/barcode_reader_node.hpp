@@ -39,7 +39,6 @@
 #include <rclcpp/timer.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 
 #include "zbar_ros_interfaces/msg/symbol.hpp"
 namespace zbar_ros {
@@ -63,7 +62,7 @@ class BarcodeReaderNode : public rclcpp::Node {
     std::unordered_map<std::string, rclcpp::Time> barcode_memory_;
     double throttle_;
 
-    std::string image_topic_{"camera/image"};
+    std::string image_topic_{"camera/image/mono8"};
     std::string qr_code_topic_{"/barcode/code_string"};
     std::string qr_image_topic_{"/barcode/image"};
 };
