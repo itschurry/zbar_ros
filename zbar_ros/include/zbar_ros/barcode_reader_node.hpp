@@ -39,7 +39,6 @@
 #include <rclcpp/timer.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 
 #include "zbar_ros_interfaces/msg/symbol.hpp"
 namespace zbar_ros {
@@ -49,10 +48,10 @@ class BarcodeReaderNode : public rclcpp::Node {
     BarcodeReaderNode();
 
   private:
-    void imageCb(sensor_msgs::msg::CompressedImage::ConstSharedPtr msg);
+    void imageCb(sensor_msgs::msg::Image::ConstSharedPtr msg);
     void cleanCb();
 
-    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr camera_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
     rclcpp::Publisher<zbar_ros_interfaces::msg::Symbol>::SharedPtr symbol_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr barcode_pub_; // DEPRECATED
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr barcode_image_pub_;
@@ -63,7 +62,7 @@ class BarcodeReaderNode : public rclcpp::Node {
     std::unordered_map<std::string, rclcpp::Time> barcode_memory_;
     double throttle_;
 
-    std::string image_topic_{"camera/image/compressed"};
+    std::string image_topic_{"camera/image/mono8"};
     std::string qr_code_topic_{"/barcode/code_string"};
     std::string qr_image_topic_{"/barcode/image"};
 };
