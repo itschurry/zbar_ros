@@ -100,8 +100,8 @@ BarcodeReaderNode::BarcodeReaderNode() : Node("barcode_reader_node") {
 
     rclcpp::QoS qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
 
-    camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-        image_topic_, qos, std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
+    camera_sub_ = this->create_subscription<sensor_msgs::msg::Image>(image_topic_, qos,
+                                                                     std::bind(&BarcodeReaderNode::imageCb, this, std::placeholders::_1));
 
     symbol_pub_ = this->create_publisher<zbar_ros_interfaces::msg::Symbol>("symbol", 10);
     barcode_pub_ = this->create_publisher<std_msgs::msg::String>(qr_code_topic_, 10);
@@ -120,78 +120,79 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
 
     try {
 
-    cv_bridge::CvImageConstPtr cv_image;
-    cv_image = cv_bridge::toCvShare(image, "mono8");
+        cv_bridge::CvImageConstPtr cv_image;
+        cv_image = cv_bridge::toCvShare(image, "mono8");
 
-    const cv::Mat& gray = cv_image->image;
-    if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
-        return;
-    }
-    const cv::Rect roi = detectQrRoi(gray);
-    if (roi.width <= 0 || roi.height <= 0) {
-        return;
-    }
-    cv::Mat cropped = gray(roi);
-    if (cropped.empty()) {
-        return;
-    }
-    cv::Mat scan_img = upscaleIfSmall(cropped, 320);
-
-    if (barcode_image_pub_ && barcode_image_pub_->get_subscription_count() > 0) {
-        sensor_msgs::msg::Image crop_msg;
-        cv_bridge::CvImage crop_cv;
-        crop_cv.header = image->header;
-        crop_cv.encoding = "mono8";
-        crop_cv.image = cropped;
-        crop_cv.toImageMsg(crop_msg);
-        barcode_image_pub_->publish(crop_msg);
-    }
-
-    if (!scan_img.isContinuous()) scan_img = scan_img.clone();
-    zbar::Image zimg(scan_img.cols, scan_img.rows, "Y800", scan_img.data, scan_img.cols * scan_img.rows);
-    scanner_.scan(zimg);
-
-    auto it_start = zimg.symbol_begin();
-    auto it_end = zimg.symbol_end();
-    if (it_start != it_end) {
-        for (zbar::Image::SymbolIterator symbol_it = it_start; symbol_it != it_end; ++symbol_it) {
-            zbar_ros_interfaces::msg::Symbol symbol;
-            symbol.data = symbol_it->get_data();
-            RCLCPP_DEBUG(get_logger(), "Barcode detected with data: '%s'", symbol.data.c_str());
-
-            if (throttle_ > 0.0) {
-                const std::lock_guard<std::mutex> lock(memory_mutex_);
-                const std::string& barcode = symbol.data;
-                if (barcode_memory_.count(barcode) > 0) {
-                    if (now() > barcode_memory_.at(barcode)) {
-                        barcode_memory_.erase(barcode);
-                    } else {
-                        continue;
-                    }
-                }
-                barcode_memory_.insert(std::make_pair(barcode, now() + rclcpp::Duration(std::chrono::duration<double>(throttle_))));
-            }
-
-            symbol_pub_->publish(symbol);
-
-            std_msgs::msg::String barcode_string;
-            barcode_string.data = symbol.data;
-            barcode_pub_->publish(barcode_string);
+        const cv::Mat& gray = cv_image->image;
+        if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
+            return;
         }
-    } else {
-        RCLCPP_DEBUG(get_logger(), "No barcode detected in image");
-    }
+        const cv::Rect roi = detectQrRoi(gray);
+        if (roi.width <= 0 || roi.height <= 0) {
+            return;
+        }
+        cv::Mat cropped = gray(roi);
+        if (cropped.empty()) {
+            return;
+        }
+        cv::Mat scan_img = upscaleIfSmall(cropped, 320);
 
-    static bool alreadyWarnedDeprecation = false;
-    if (!alreadyWarnedDeprecation && count_subscribers("barcode") > 0) {
-        alreadyWarnedDeprecation = true;
-        RCLCPP_WARN(get_logger(), "A subscription was detected on the deprecated topic 'barcode'. Please update the node "
-                                  "that is subscribing to use the new topic 'symbol' with type "
-                                  "'zbar_ros_interfaces::msg::Symbol' instead. The 'barcode' topic will be removed "
-                                  "in the next distribution.");
-    }
+        if (barcode_image_pub_ && barcode_image_pub_->get_subscription_count() > 0) {
+            sensor_msgs::msg::Image crop_msg;
+            cv_bridge::CvImage crop_cv;
+            crop_cv.header = image->header;
+            crop_cv.encoding = "mono8";
+            crop_cv.image = cropped;
+            crop_cv.toImageMsg(crop_msg);
+            barcode_image_pub_->publish(crop_msg);
+        }
 
-    zimg.set_data(NULL, 0);
+        if (!scan_img.isContinuous()) scan_img = scan_img.clone();
+        zbar::Image zimg(scan_img.cols, scan_img.rows, "Y800", scan_img.data, scan_img.cols * scan_img.rows);
+        scanner_.scan(zimg);
+
+        auto it_start = zimg.symbol_begin();
+        auto it_end = zimg.symbol_end();
+        if (it_start != it_end) {
+            for (zbar::Image::SymbolIterator symbol_it = it_start; symbol_it != it_end; ++symbol_it) {
+                zbar_ros_interfaces::msg::Symbol symbol;
+                symbol.data = symbol_it->get_data();
+                RCLCPP_DEBUG(get_logger(), "Barcode detected with data: '%s'", symbol.data.c_str());
+
+                if (throttle_ > 0.0) {
+                    const std::lock_guard<std::mutex> lock(memory_mutex_);
+                    const std::string& barcode = symbol.data;
+                    if (barcode_memory_.count(barcode) > 0) {
+                        if (now() > barcode_memory_.at(barcode)) {
+                            barcode_memory_.erase(barcode);
+                        } else {
+                            continue;
+                        }
+                    }
+                    barcode_memory_.insert(std::make_pair(barcode, now() + rclcpp::Duration(std::chrono::duration<double>(throttle_))));
+                }
+
+                symbol_pub_->publish(symbol);
+
+                std_msgs::msg::String barcode_string;
+                barcode_string.data = symbol.data;
+                barcode_pub_->publish(barcode_string);
+                barcode_string.data = "unknown"; // clear for next use
+            }
+        } else {
+            RCLCPP_DEBUG(get_logger(), "No barcode detected in image");
+        }
+
+        static bool alreadyWarnedDeprecation = false;
+        if (!alreadyWarnedDeprecation && count_subscribers("barcode") > 0) {
+            alreadyWarnedDeprecation = true;
+            RCLCPP_WARN(get_logger(), "A subscription was detected on the deprecated topic 'barcode'. Please update the node "
+                                      "that is subscribing to use the new topic 'symbol' with type "
+                                      "'zbar_ros_interfaces::msg::Symbol' instead. The 'barcode' topic will be removed "
+                                      "in the next distribution.");
+        }
+
+        zimg.set_data(NULL, 0);
     } catch (const cv::Exception& e) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "OpenCV exception in barcode_reader_node imageCb: %s", e.what());
         return;
