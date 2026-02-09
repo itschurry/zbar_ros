@@ -28,11 +28,13 @@
  * Please send comments, questions, or patches to code@clearpathrobotics.com
  *
  */
-#include <string>
-#include <vector>
-#include <functional>
+#include <algorithm>
 #include <chrono>
 #include <exception>
+#include <functional>
+#include <string>
+#include <vector>
+
 #include "zbar_ros/barcode_reader_node.hpp"
 #include "cv_bridge/cv_bridge.hpp"
 #include <opencv2/opencv.hpp>
@@ -40,18 +42,21 @@
 
 namespace {
 
+constexpr int kMinScanSide = 320;
+constexpr double kRoiPadRatio = 0.1;
+
 static inline cv::Rect clampRect(const cv::Rect& r, const cv::Size& sz) {
     return r & cv::Rect(0, 0, sz.width, sz.height);
 }
 
-static cv::Rect detectQrRoi(const cv::Mat& gray) {
+// Pass detector and reusable vector to avoid allocations per-frame
+static cv::Rect detectQrRoi(const cv::Mat& gray, cv::QRCodeDetector& det, std::vector<cv::Point>& points) {
     if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
         return cv::Rect();
     }
 
     try {
-        cv::QRCodeDetector det;
-        std::vector<cv::Point> points;
+        points.clear();
         if (!det.detect(gray, points) || points.size() < 4) {
             return cv::Rect(0, 0, gray.cols, gray.rows);
         }
@@ -61,7 +66,7 @@ static cv::Rect detectQrRoi(const cv::Mat& gray) {
             return cv::Rect(0, 0, gray.cols, gray.rows);
         }
 
-        const int pad = static_cast<int>(0.1f * std::max(bbox.width, bbox.height));
+        const int pad = static_cast<int>(kRoiPadRatio * std::max(bbox.width, bbox.height));
         cv::Rect expanded(bbox.x - pad, bbox.y - pad, bbox.width + 2 * pad, bbox.height + 2 * pad);
         expanded = clampRect(expanded, gray.size());
         if (expanded.width <= 0 || expanded.height <= 0) {
@@ -75,13 +80,30 @@ static cv::Rect detectQrRoi(const cv::Mat& gray) {
     }
 }
 
-static cv::Mat upscaleIfSmall(const cv::Mat& gray, int min_side = 320) {
+// Reuse output Mat to avoid allocation when resize is needed
+static void upscaleIfSmall(const cv::Mat& gray, cv::Mat& out, int min_side = kMinScanSide) {
     const int s = std::min(gray.cols, gray.rows);
-    if (s >= min_side) return gray;
-    const double scale = static_cast<double>(min_side) / static_cast<double>(std::max(1, s));
-    cv::Mat up;
-    cv::resize(gray, up, cv::Size(), scale, scale, cv::INTER_NEAREST);
-    return up;
+    if (s >= min_side) {
+        out = gray;
+    } else {
+        const double scale = static_cast<double>(min_side) / static_cast<double>(std::max(1, s));
+        cv::resize(gray, out, cv::Size(), scale, scale, cv::INTER_NEAREST);
+    }
+}
+
+static void publishCroppedImage(const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& publisher,
+                                const sensor_msgs::msg::Image& source_msg, const cv::Mat& cropped) {
+    if (!publisher || publisher->get_subscription_count() == 0) {
+        return;
+    }
+
+    sensor_msgs::msg::Image crop_msg;
+    cv_bridge::CvImage crop_cv;
+    crop_cv.header = source_msg.header;
+    crop_cv.encoding = "mono8";
+    crop_cv.image = cropped;
+    crop_cv.toImageMsg(crop_msg);
+    publisher->publish(crop_msg);
 }
 
 } // namespace
@@ -120,35 +142,31 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
     RCLCPP_DEBUG(get_logger(), "Image received on subscribed topic");
 
     try {
-
-        cv_bridge::CvImageConstPtr cv_image;
-        cv_image = cv_bridge::toCvShare(image, "mono8");
+        cv_bridge::CvImageConstPtr cv_image = cv_bridge::toCvShare(image, "mono8");
 
         const cv::Mat& gray = cv_image->image;
         if (gray.empty() || gray.cols <= 0 || gray.rows <= 0) {
             return;
         }
-        const cv::Rect roi = detectQrRoi(gray);
+
+        const cv::Rect roi = detectQrRoi(gray, qr_detector_, qr_points_);
         if (roi.width <= 0 || roi.height <= 0) {
             return;
         }
+
         cv::Mat cropped = gray(roi);
         if (cropped.empty()) {
             return;
         }
-        cv::Mat scan_img = upscaleIfSmall(cropped, 320);
 
-        if (barcode_image_pub_ && barcode_image_pub_->get_subscription_count() > 0) {
-            sensor_msgs::msg::Image crop_msg;
-            cv_bridge::CvImage crop_cv;
-            crop_cv.header = image->header;
-            crop_cv.encoding = "mono8";
-            crop_cv.image = cropped;
-            crop_cv.toImageMsg(crop_msg);
-            barcode_image_pub_->publish(crop_msg);
+        publishCroppedImage(barcode_image_pub_, *image, cropped);
+
+        upscaleIfSmall(cropped, scan_img_, kMinScanSide);
+        if (!scan_img_.isContinuous()) {
+            scan_img_ = scan_img_.clone();
         }
+        cv::Mat& scan_img = scan_img_;
 
-        if (!scan_img.isContinuous()) scan_img = scan_img.clone();
         zbar::Image zimg(scan_img.cols, scan_img.rows, "Y800", scan_img.data, scan_img.cols * scan_img.rows);
         scanner_.scan(zimg);
 
@@ -160,17 +178,8 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
                 symbol.data = symbol_it->get_data();
                 RCLCPP_DEBUG(get_logger(), "Barcode detected with data: '%s'", symbol.data.c_str());
 
-                if (throttle_ > 0.0) {
-                    const std::lock_guard<std::mutex> lock(memory_mutex_);
-                    const std::string& barcode = symbol.data;
-                    if (barcode_memory_.count(barcode) > 0) {
-                        if (now() > barcode_memory_.at(barcode)) {
-                            barcode_memory_.erase(barcode);
-                        } else {
-                            continue;
-                        }
-                    }
-                    barcode_memory_.insert(std::make_pair(barcode, now() + rclcpp::Duration(std::chrono::duration<double>(throttle_))));
+                if (!shouldPublishBarcode(symbol.data)) {
+                    continue;
                 }
 
                 symbol_pub_->publish(symbol);
@@ -184,14 +193,7 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
             RCLCPP_DEBUG(get_logger(), "No barcode detected in image");
         }
 
-        static bool alreadyWarnedDeprecation = false;
-        if (!alreadyWarnedDeprecation && count_subscribers("barcode") > 0) {
-            alreadyWarnedDeprecation = true;
-            RCLCPP_WARN(get_logger(), "A subscription was detected on the deprecated topic 'barcode'. Please update the node "
-                                      "that is subscribing to use the new topic 'symbol' with type "
-                                      "'zbar_ros_interfaces::msg::Symbol' instead. The 'barcode' topic will be removed "
-                                      "in the next distribution.");
-        }
+        warnDeprecatedBarcodeTopicOnce();
 
         zimg.set_data(NULL, 0);
     } catch (const cv::Exception& e) {
@@ -206,11 +208,43 @@ void BarcodeReaderNode::imageCb(sensor_msgs::msg::Image::ConstSharedPtr image) {
     }
 }
 
+bool BarcodeReaderNode::shouldPublishBarcode(const std::string& barcode) {
+    if (throttle_ <= 0.0) {
+        return true;
+    }
+
+    const std::lock_guard<std::mutex> lock(memory_mutex_);
+    const rclcpp::Time now_time = now();
+    auto it = barcode_memory_.find(barcode);
+    if (it != barcode_memory_.end()) {
+        if (now_time > it->second) {
+            barcode_memory_.erase(it);
+        } else {
+            return false;
+        }
+    }
+
+    barcode_memory_[barcode] = now_time + rclcpp::Duration(std::chrono::duration<double>(throttle_));
+    return true;
+}
+
+void BarcodeReaderNode::warnDeprecatedBarcodeTopicOnce() {
+    static bool alreadyWarnedDeprecation = false;
+    if (!alreadyWarnedDeprecation && count_subscribers("barcode") > 0) {
+        alreadyWarnedDeprecation = true;
+        RCLCPP_WARN(get_logger(), "A subscription was detected on the deprecated topic 'barcode'. Please update the node "
+                                  "that is subscribing to use the new topic 'symbol' with type "
+                                  "'zbar_ros_interfaces::msg::Symbol' instead. The 'barcode' topic will be removed "
+                                  "in the next distribution.");
+    }
+}
+
 void BarcodeReaderNode::cleanCb() {
     const std::lock_guard<std::mutex> lock(memory_mutex_);
+    const rclcpp::Time now_time = now();
     auto it = barcode_memory_.begin();
     while (it != barcode_memory_.end()) {
-        if (now() > it->second) {
+        if (now_time > it->second) {
             RCLCPP_DEBUG(get_logger(), "Cleaned %s from memory", it->first.c_str());
             it = barcode_memory_.erase(it);
         } else {

@@ -31,14 +31,18 @@
 #ifndef ZBAR_ROS__BARCODE_READER_NODE_HPP_
 #define ZBAR_ROS__BARCODE_READER_NODE_HPP_
 
+#include <mutex>
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include "./zbar.h"
 
+#include <opencv2/opencv.hpp>
+#include <opencv2/objdetect.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/timer.hpp>
-#include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "zbar_ros_interfaces/msg/symbol.hpp"
 namespace zbar_ros {
@@ -50,6 +54,8 @@ class BarcodeReaderNode : public rclcpp::Node {
   private:
     void imageCb(sensor_msgs::msg::Image::ConstSharedPtr msg);
     void cleanCb();
+    bool shouldPublishBarcode(const std::string& barcode);
+    void warnDeprecatedBarcodeTopicOnce();
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
     rclcpp::Publisher<zbar_ros_interfaces::msg::Symbol>::SharedPtr symbol_pub_;
@@ -61,6 +67,12 @@ class BarcodeReaderNode : public rclcpp::Node {
     std::mutex memory_mutex_;
     std::unordered_map<std::string, rclcpp::Time> barcode_memory_;
     double throttle_;
+    rclcpp::Time last_cleanup_time_{0, 0, RCL_ROS_TIME};
+
+    // Reusable resources to minimize allocations
+    cv::QRCodeDetector qr_detector_;
+    std::vector<cv::Point> qr_points_;
+    cv::Mat scan_img_;
 
     std::string image_topic_{"camera/image/mono8"};
     std::string qr_code_topic_{"/barcode/code_string"};
